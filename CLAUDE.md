@@ -39,8 +39,8 @@ npx tsx packages/data-pipeline/src/cli.ts lexbin      # lexicon.jsonl → lexico
 
 # 正式模型（大語料）：PTT 全量 + 維基 1.5 億字 → data/models/lm.tsv（約 1GB，訓練約 17 分鐘）
 python packages/data-pipeline/scripts/extract-wiki.py 0 data/raw/wiki/wiki_full.jsonl
-CORPUS_OUT=data/processed/corpus-big2 WIKI_FILE=data/raw/wiki/wiki_full.jsonl npx tsx packages/data-pipeline/scripts/build-big-corpus.ts 1e12 150e6
-NODE_OPTIONS=--max-old-space-size=34000 npx tsx packages/lm/src/train.ts data/processed/corpus-big2 data/models/lm.tsv
+CORPUS_EN=1 CORPUS_OUT=data/processed/corpus-num WIKI_FILE=data/raw/wiki/wiki_full.jsonl npx tsx packages/data-pipeline/scripts/build-big-corpus.ts 1e12 150e6
+NODE_OPTIONS=--max-old-space-size=34000 npx tsx packages/lm/src/train.ts data/processed/corpus-num data/models/lm.tsv
 ```
 
 `data/raw`, `data/models`, `data/user` are gitignored. The engine reads `data/models/lm.bo.bin`, `data/processed/lexicon.bin`, `data/processed/syllables.json`.
@@ -50,7 +50,7 @@ NODE_OPTIONS=--max-old-space-size=34000 npx tsx packages/lm/src/train.ts data/pr
 - 詞典索引：`core/src/lexicon.ts` `LexiconIndex`（音節編號＋typed array，格式 `ZYLEX002`）；`data-pipeline` 的 `lexbin`（`src/build/lexbin.ts`，`data:lexicon` 最後一步）從 lexicon.jsonl 建 `lexicon.bin`，寫入走暫存檔＋改名。Rust `native/src/lexicon.rs` 唯讀。
 - `LanguageModel` 的 `.bin` 格式（`save`／`readBin`）與 `quant`／`mph` 載入選項是 TS 引擎時代的計數模型打包，現在只剩測試在用（`pack.ts`、`lmOptionsFromEnv` 已刪）。
 - 二元／三元表是 typed array 雜湊表（`packages/lm/src/hashtable.ts`），不是 JS Map（改回 Map 會讓每次 major GC 掃描數千萬物件）。訓練（`train.ts`）仍用 Map，需要 `--max-old-space-size=34000`。
-- `build-big-corpus.ts` 取「連續中文字片段」而非整句清洗，並丟掉包含任何評測句的片段（防洩漏）。`CORPUS_EN=1`：英文詞換成類別符號 `EN_CLASS`（``，`core/src/index.ts`）、中英之間的空白不斷句，含英文的片段每 200 個留一個到 `mixed-heldout.txt`（不訓練）；第二個參數 0＝只建 PTT。中英評測集 `eval/mixed.jsonl`（`scripts/build-mixed-eval.ts`）。解碼器把含拉丁字母的原樣 token 當 `EN_CLASS` 查 LM（`decode.rs` `is_english`），輸出原字。數字見 docs/MEMORY.md §7。
+- `build-big-corpus.ts` 取「連續中文字片段」而非整句清洗，並丟掉包含任何評測句的片段（防洩漏）。`CORPUS_EN=1`：英文詞換成類別符號 `EN_CLASS`（``，`core/src/index.ts`）、中英之間的空白不斷句，含英文的片段每 200 個留一個到 `mixed-heldout.txt`（不訓練）；第二個參數 0＝只建 PTT。中英評測集 `eval/mixed.jsonl`（`scripts/build-mixed-eval.ts`）。解碼器把含拉丁字母的原樣 token 當 `EN_CLASS` 查 LM（`decode.rs` `lm_token`），輸出原字。數字見 docs/MEMORY.md §7。一串阿拉伯數字同樣換成 `NUM_CLASS`（`\uE001`），解碼器把只有數字的原樣 token 當它查；以前數字會斷開片段，「3個月」變成「個」開頭的句子（docs/MEMORY.md §9）。
 - `LM_TOKEN_PENALTY`（預設 14）必須大於高頻單字的 log(freq)，否則訓練斷詞會把詞切成單字。
 - 有字的音節打錯（魔跳出→沒跳出）：解碼後的單字局部修正 `refine`（預設開；上一鍵已更正的字加 `refine_sticky` 3 防退回，`ZHUYIN_FLIP=1 eval` 數退回）、選字視窗的更正字排法 `MenuRank`、學打錯習慣 `Channel::learn`；實驗指令 `zhuyin-native menu`／`habit`（`exp.rs`），數字見 docs/MEMORY.md §8。
 - 挖詞：`npx tsx packages/data-pipeline/scripts/mine-words.ts [lm.tsv] [lexicon.jsonl] [mined.jsonl]`（約 3 分鐘）從 lm.tsv 的詞計數挖常用複合詞 → `data/processed/mined.jsonl`（provenance=mined），`npm run data:lexicon` 合併進詞典；之後要重訓 lm.tsv、重建 lm.bo.bin 新詞才有機率。門檻與數字見 docs/MEMORY.md §7。

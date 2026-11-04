@@ -3,7 +3,8 @@
 // 改取「連續中文字片段」：任何非中文字都切開，保留 ≥4 字的片段。
 // 用法：npx tsx packages/data-pipeline/scripts/build-big-corpus.ts [pttMaxChars] [wikiMaxChars]
 // CORPUS_EN=1：英文詞不切開，換成類別符號 EN_CLASS（連續英文詞併成一個），中文與英文之間的空白
-// 不算斷句；LM 因此學到 P(英文 | 開新的)。含英文的片段約每 HELDOUT_MOD 個留一個給
+// 不算斷句；LM 因此學到 P(英文 | 開新的)。一串數字同樣換成 NUM_CLASS（不然「3個月」的量詞變成句首）。
+// 含英文的片段約每 HELDOUT_MOD 個留一個給
 // eval/mixed.jsonl 的來源（$CORPUS_OUT/mixed-heldout.txt，原文），不進訓練。wikiMaxChars=0 只建 PTT。
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -13,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import * as OpenCC from 'opencc-js';
 import { iterPttTexts } from '../src/sources/corpus.js';
 import { leakChecker } from '../src/build/leak.js';
-import { EN_CLASS } from '@zhuyin/core';
+import { EN_CLASS, NUM_CLASS } from '@zhuyin/core';
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(thisDir, '..', '..', '..');
@@ -26,9 +27,11 @@ const toTwp = OpenCC.Converter({ from: 'cn', to: 'twp' });
 
 // 留測防護：片段和任一評測句共用 8 字窗即丟棄（近似重複也擋，見 leak.ts）
 const evalTexts: string[] = [];
-for (const f of ['colloquial.jsonl', 'written.jsonl']) {
+// mixed.jsonl 也擋：NUM_CLASS 讓留測的雜湊變了，以前留測的句子現在可能落在訓練那邊
+for (const f of ['colloquial.jsonl', 'written.jsonl', 'mixed.jsonl']) {
   for (const line of (await readFile(path.join(REPO, 'eval', f), 'utf8')).split('\n')) {
-    if (line.startsWith('{"text"')) evalTexts.push((JSON.parse(line) as { text: string }).text);
+    if (line.startsWith('{"text"'))
+      evalTexts.push((JSON.parse(line) as { text: string }).text.replaceAll(' ', ''));
   }
 }
 const leaks = leakChecker(evalTexts);
@@ -36,6 +39,8 @@ const leaks = leakChecker(evalTexts);
 const WITH_EN = process.env['CORPUS_EN'] === '1';
 const HELDOUT_MOD = 200;
 const HAN_RUN = /^[㐀-鿿]+$/;
+const NUM_RUN = /^[0-9０-９]+$/;
+const isClass = (s: string): boolean => s.endsWith(EN_CLASS) || s.endsWith(NUM_CLASS);
 
 /**
  * 一段文字 → 片段 [類別化字串, 原文]。中文串與英文詞交錯，中間只隔空白；
@@ -50,7 +55,7 @@ export function enPieces(text: string): [string, string][] {
     if (cls) out.push([cls, raw.trim()]);
     cls = raw = '';
   };
-  for (const tok of text.match(/[㐀-鿿]+|[A-Za-z0-9]+| +|[^㐀-鿿A-Za-z0-9 ]+/g) ?? []) {
+  for (const tok of text.match(/[㐀-鿿]+|[A-Za-z0-9０-９]+| +|[^㐀-鿿A-Za-z0-9０-９ ]+/g) ?? []) {
     if (tok[0] === ' ') {
       space = true;
       continue;
@@ -58,11 +63,12 @@ export function enPieces(text: string): [string, string][] {
     const wasSpace = space;
     space = false;
     if (HAN_RUN.test(tok)) {
-      if (wasSpace && !cls.endsWith(EN_CLASS)) flush();
+      if (wasSpace && !isClass(cls)) flush();
       cls += tok;
       raw += (wasSpace && cls !== tok ? ' ' : '') + tok;
-    } else if (/[A-Za-z]/.test(tok)) {
-      if (!cls.endsWith(EN_CLASS)) cls += EN_CLASS;
+    } else if (/[A-Za-z]/.test(tok) || NUM_RUN.test(tok)) {
+      const c = NUM_RUN.test(tok) ? NUM_CLASS : EN_CLASS;
+      if (!cls.endsWith(c)) cls += c;
       raw += (wasSpace && raw ? ' ' : '') + tok;
     } else flush();
   }
@@ -103,7 +109,7 @@ async function collect(
     for (const [run, raw] of pieces) {
       if (run.length < 4) continue;
       if (held && run.includes(EN_CLASS)) {
-        if (run.replaceAll(EN_CLASS, '').length < 2) continue;
+        if (run.replaceAll(EN_CLASS, '').replaceAll(NUM_CLASS, '').length < 2) continue;
         if (hash(run) % HELDOUT_MOD === 0) {
           heldout++;
           held.write(raw + '\n');
@@ -114,7 +120,7 @@ async function collect(
         if (seenLong.has(run)) continue;
         seenLong.add(run);
       }
-      if (leaks(run)) {
+      if (leaks(run) || leaks(raw.replaceAll(' ', ''))) {
         leaked++;
         continue;
       }

@@ -190,7 +190,7 @@ Score = Σ_詞 [ a·logP_word(w | 前兩詞)
 - 破音單字額外扣 `poly_penalty=1`（2026-10-27 從 2.5 調降：主評測 +1.0／+1.0／+1.5，L3 雜訊 −0.5；並／比／化／尾等常用破音字以前常輸給同音單字）；用的是次要讀音時再扣 `poly_minor_penalty=6`。
 - N-best 用 **list-Viterbi**：狀態是「前兩詞」，每個狀態保留 K 條部分路徑（預設 4），全域 beam 上限 200。
 - 每條路徑附 `breakdown`：逐詞的詞與採用的讀音（`reading`）。
-- 含拉丁字母的原樣 token 當 `EN_CLASS` 查 LM（`is_english`），輸出原字。
+- 含拉丁字母的原樣 token 當 `EN_CLASS`、只有數字的當 `NUM_CLASS` 查 LM（`lm_token`），輸出原字。
 - `add_entry` 可在執行中加詞（X2 造詞、挖詞），不重建索引。LM 不認得的新詞用拆成已知詞的最佳分數（`parts_log_prob`）。
 
 **X2 使用者適應**（`x2.rs`）
@@ -273,7 +273,7 @@ npm workspaces monorepo。套件之間透過各自的 `dist/` 互相引用，所
 | `data/processed/lexicon.jsonl` | `npm run data:lexicon` | LM 訓練、評測集、lexicon.bin |
 | `data/processed/lexicon.bin` | `npm run data:lexicon`（`lexbin`） | 引擎 |
 | `data/processed/syllables.json` | `cli.ts syllables` | 引擎（L2、L3） |
-| `data/processed/corpus-big2/` | `build-big-corpus.ts` | LM 訓練 |
+| `data/processed/corpus-num/` | `CORPUS_EN=1 build-big-corpus.ts` | LM 訓練 |
 | `data/models/lm.tsv` | `lm/src/train.ts`（約 1GB，約 17 分鐘） | `shrink.ts` |
 | `data/models/lm.bo.bin` | `lm/src/shrink.ts`（約 4 分鐘） | 引擎 |
 | `eval/*.jsonl` | `cli.ts evalset`（已提交） | `zhuyin-native eval` |
@@ -311,7 +311,8 @@ npm workspaces monorepo。套件之間透過各自的 `dist/` 互相引用，所
 |---|---|---|
 | 舊 `lm.json` L5 | 59.0% | 70.2% |
 | `lm.tsv` L5（計數模型） | 76.7% | 80.4% |
-| `lm.bo.bin` L5（目前，2026-10-31 `eval`） | 79.3% | 82.4% |
+| `lm.bo.bin` L5（2026-10-31 `eval`） | 79.3% | 82.4% |
+| `lm.bo.bin` L5（目前，數字類別符號，2026-11-05 `eval`） | 79.0% | 85.4% |
 | `lm.tsv` + Kev `runs/zy-choice16k` w=3（已封存） | 80.4% | 89.0% |
 
 L3 只用合成錯誤評測過，錯誤分布跟 L3 共用同一張鄰鍵表與模糊音表，結果偏樂觀。

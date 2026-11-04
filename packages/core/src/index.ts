@@ -120,3 +120,9 @@ export interface LexiconEntry {
  * 解碼器（native/src/decode.rs is_english）把組字區裡的英文原樣 token 當成它來查 LM（詞、字兩個專家都是）。
  */
 export const EN_CLASS = '';
+
+/**
+ * 數字類別符號：同 EN_CLASS，換掉一串阿拉伯數字（半形、全形）。以前數字會斷開片段，
+ * 「3個月」變成以「個」開頭的句子，句首的量詞（個、月、年…）機率因此灌高。
+ */
+export const NUM_CLASS = '';

@@ -12,6 +12,8 @@ const EOS: &str = "\u{3}";
 const UNK_WORD: &str = "\u{25A1}";
 /// 英文類別符號（decode.ts EN_CLASS）：英文原樣 token 用它查 LM
 const EN_CLASS: &str = "\u{E000}";
+/// 數字類別符號（@zhuyin/core NUM_CLASS）：只有數字的原樣 token 用它查 LM
+const NUM_CLASS: &str = "\u{E001}";
 /// JS 的 Math.log(1e-7)：寫死，免得 libm 的末位與 V8 不同
 /// X1 軟體／科技寫作的領域詞表（本專案自編），一律加 domain_bonus
 const DOMAIN_TECH: &str = include_str!("domain/tech.txt");
@@ -26,6 +28,20 @@ pub fn is_literal(t: &str) -> bool {
 /// 含拉丁字母的原樣 token（英文）：LM 看到的是 EN_CLASS（decode.ts lmToken）
 fn is_english(t: &str) -> bool {
     t.chars().any(|c| c.is_ascii_alphabetic()) && is_literal(t)
+}
+
+/// LM 看到的 token：英文 → EN_CLASS、只有數字（半形、全形）→ NUM_CLASS、其他照原字
+fn lm_token(t: &str) -> &str {
+    if is_english(t) {
+        EN_CLASS
+    } else if !t.is_empty()
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || ('０'..='９').contains(&c))
+    {
+        NUM_CLASS
+    } else {
+        t
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -341,6 +357,7 @@ impl Decoder {
         let empty = words.intern("");
         let unk = words.intern(UNK_WORD);
         let en = words.intern(EN_CLASS);
+        let num = words.intern(NUM_CLASS);
         if p == 0 {
             lat.paths.push(Path {
                 score: 0.0,
@@ -458,7 +475,7 @@ impl Decoder {
                     let (w1s, w2s) = (words.name(w1), words.name(w2));
                     for c in cands {
                         let name = words.name(c.word);
-                        let name = if is_english(name) { EN_CLASS } else { name };
+                        let name = lm_token(name);
                         let read = c
                             .fix
                             .as_ref()
@@ -481,10 +498,10 @@ impl Decoder {
                             continue;
                         }
                         // LM 上下文（狀態鍵、w2、尾兩字）用 LM 看到的詞；輸出用原字
-                        let lw = if is_english(words.name(word)) {
-                            en
-                        } else {
-                            word
+                        let lw = match lm_token(words.name(word)) {
+                            EN_CLASS => en,
+                            NUM_CLASS => num,
+                            _ => word,
                         };
                         let k = key(w2, lw);
                         let mut li = target.index.get(&k).copied();
@@ -654,11 +671,7 @@ impl Decoder {
         let (mut pos, mut s) = (0, 0.0);
         for b in bd {
             let len = b.reading.len();
-            let name = if is_english(&b.word) {
-                EN_CLASS
-            } else {
-                b.word.as_str()
-            };
+            let name = lm_token(&b.word);
             if name == UNK_WORD {
                 s += a * UNK_PENALTY;
             } else {
@@ -1030,6 +1043,10 @@ mod tests {
         assert!(is_literal(" ") && is_literal("abc") && is_literal("，"));
         assert!(!is_literal("ㄋㄧˇ") && !is_literal("aㄅ"));
         assert!(is_english("abc") && is_english("a1") && !is_english("12") && !is_english("ㄅa"));
+        assert_eq!(lm_token("12"), NUM_CLASS);
+        assert_eq!(lm_token("１２"), NUM_CLASS);
+        assert_eq!(lm_token("a1"), EN_CLASS);
+        assert_eq!(lm_token("，"), "，");
     }
 
     #[test]
