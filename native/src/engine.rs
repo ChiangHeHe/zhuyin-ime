@@ -288,6 +288,8 @@ pub struct ImeEngine {
     lattice: RefCell<Lattice>,
     /// 這次組字的 X2 時間：整段固定，增量解碼重用的前綴才和全量相同（半衰期 14 天，差異可忽略）
     decode_at: Cell<Option<f64>>,
+    /// 上一次顯示的第一名逐音節讀音（refine 防閃動，DecodeOptions::prev）；組字清空時作廢
+    prev_readings: RefCell<Vec<String>>,
 }
 
 impl ImeEngine {
@@ -312,6 +314,7 @@ impl ImeEngine {
             backspaces: 0,
             lattice: Default::default(),
             decode_at: Cell::new(None),
+            prev_readings: Default::default(),
         }
     }
 
@@ -349,7 +352,11 @@ impl ImeEngine {
     }
 
     fn decode_with_adapter(&self) -> Vec<DecodePath> {
-        self.decode_fixed(&self.fixed, Some(&mut self.lattice.borrow_mut()))
+        let paths = self.decode_fixed(&self.fixed, Some(&mut self.lattice.borrow_mut()));
+        *self.prev_readings.borrow_mut() = paths.first().map_or(vec![], |p| {
+            p.breakdown.iter().flat_map(|b| b.reading.clone()).collect()
+        });
+        paths
     }
 
     /// lat：增量解碼用的格；None＝全量（另一組選字，不動格）
@@ -372,11 +379,13 @@ impl ImeEngine {
             cache.borrow_mut().insert(k, u);
             u
         };
+        let prev = self.prev_readings.borrow();
         let o = DecodeOptions {
             n_best: 4,
             modifier: adapt.map(|_| &modifier as &dyn Fn(&str, usize, usize) -> f64),
             alternatives: alts.as_deref(),
             fixed,
+            prev: &prev,
         };
         let paths = match lat {
             Some(lat) => self.decoder.decode_in(lat, seq, &o),
@@ -1104,6 +1113,7 @@ impl ImeEngine {
     fn reset_lattice(&mut self) {
         *self.lattice.get_mut() = Lattice::default();
         self.decode_at.set(None);
+        self.prev_readings.get_mut().clear();
     }
 }
 

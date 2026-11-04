@@ -7,6 +7,8 @@
 //!                                           ZHUYIN_EVAL＝評測檔（逗號分隔，取代預設三個；科技集 eval/tech.jsonl）；
 //!                                           ZHUYIN_DOMAIN＝X1 領域詞加分（預設 2，0＝不加）；
 //!                                           ZHUYIN_REFINE＝門檻（預設 0）或 off：L3 開時解碼後再做單字局部修正，ZHUYIN_REFINE_COST＝它的代價倍率（預設 1）；
+//!                                           ZHUYIN_REFINE_STICKY＝上一鍵已更正的字的黏著分（預設 3，0＝關，只在 ZHUYIN_FLIP 時有上一鍵）；
+//!                                           ZHUYIN_FLIP=1 逐音節解碼，印「打到一半已更正、最後退回原讀音」的字數；
 //!   zhuyin-native x2 [cell.jsonl]           X2 新詞／加強既有詞（eval/x2-new.jsonl、eval/x2-habit.jsonl）：照正解選字送出，
 //!                                           用 0／1／2 次後量 test 句的目標詞召回；附帶損害＝學完後 ZHUYIN_EVAL 各檔
 //!                                           （預設三個主評測集＋tech）逐句和沒學比；ZHUYIN_DOMAIN
@@ -434,6 +436,9 @@ fn main() {
             if let Some(v) = env("ZHUYIN_REFINE_COST") {
                 dec.refine_cost_scale = v;
             }
+            if let Some(v) = env("ZHUYIN_REFINE_STICKY") {
+                dec.refine_sticky = v;
+            }
             if let Some(v) = env("ZHUYIN_REFINE_UNI") {
                 dec.refine_uni = v;
             }
@@ -466,6 +471,8 @@ fn main() {
             // ZHUYIN_INCR=1：逐音節增量解碼，每步和全量解碼比對（不同就 panic），印每步延遲
             let incr = std::env::var("ZHUYIN_INCR").is_ok_and(|v| v != "0");
             let mut steps: [Vec<f64>; 2] = [vec![], vec![]];
+            // ZHUYIN_FLIP=1：逐音節解碼，數「打到一半已更正、最後又退回原讀音」的字（refine 閃動）
+            let flip = std::env::var("ZHUYIN_FLIP").is_ok_and(|v| v != "0");
             let files = std::env::var("ZHUYIN_EVAL").unwrap_or_else(|_| {
                 "eval/colloquial.jsonl,eval/written.jsonl,eval/mixed.jsonl".into()
             });
@@ -475,6 +482,8 @@ fn main() {
                 // 句準分 dev（偶數句）／test（奇數句）
                 let (mut ok, mut oracle, mut changed) = ([0usize; 2], 0, 0);
                 let (mut char_ok, mut char_total) = (0, 0);
+                // 閃動：退回的字數、其中更正本來是對的、最後有更正的字數
+                let (mut undo, mut undo_good, mut fixed_final) = (0, 0, 0);
                 let (mut err, mut hit) = (0, 0);
                 let mut lat = vec![];
                 for (i, s) in samples.iter().enumerate() {
@@ -510,8 +519,45 @@ fn main() {
                     if incr {
                         incr_check(&dec, &obs, alts.as_deref(), n_best, &mut steps);
                     }
+                    let readings = |ps: &[decode::DecodePath]| -> Vec<String> {
+                        ps.first().map_or(vec![], |p| {
+                            p.breakdown.iter().flat_map(|b| b.reading.clone()).collect()
+                        })
+                    };
+                    let mut ever: Vec<Option<String>> = vec![None; obs.len()];
+                    let mut prev: Vec<String> = vec![];
+                    if flip {
+                        let mut fl = decode::Lattice::default();
+                        for k in 1..obs.len() {
+                            let ok = decode::DecodeOptions {
+                                n_best,
+                                alternatives: alts.as_deref().map(|a| &a[..k]),
+                                prev: &prev,
+                                ..Default::default()
+                            };
+                            let rs = readings(&dec.decode_in(&mut fl, &obs[..k], &ok));
+                            for (j, r) in rs.iter().enumerate() {
+                                if *r != obs[j] {
+                                    ever[j] = Some(r.clone());
+                                }
+                            }
+                            prev = rs;
+                        }
+                    }
+                    let o = decode::DecodeOptions { prev: &prev, ..o };
                     let t = Instant::now();
                     let paths = dec.decode(&obs, &o);
+                    if flip {
+                        for (j, r) in readings(&paths).iter().enumerate() {
+                            fixed_final += (*r != obs[j]) as usize;
+                            if let Some(e) = &ever[j] {
+                                if *r == obs[j] {
+                                    undo += 1;
+                                    undo_good += (s.syllables.get(j) == Some(e)) as usize;
+                                }
+                            }
+                        }
+                    }
                     lat.push(t.elapsed().as_secs_f64() * 1000.0);
                     let out = paths.first().map_or(String::new(), |p| p.text());
                     // 逐字比較用 code point；沒有結果也算進分母
@@ -543,6 +589,10 @@ fn main() {
                 }
                 if ch.is_some() && err > 0 {
                     line += &format!(" | 涵蓋 {hit}/{err} {:.1}%", pct(hit, err));
+                }
+                if flip {
+                    line +=
+                        &format!(" | 退回 {undo}（更正本來對 {undo_good}）最後更正 {fixed_final}");
                 }
                 println!("{line}");
             }

@@ -52,7 +52,7 @@ NODE_OPTIONS=--max-old-space-size=34000 npx tsx packages/lm/src/train.ts data/pr
 - 二元／三元表是 typed array 雜湊表（`packages/lm/src/hashtable.ts`），不是 JS Map（改回 Map 會讓每次 major GC 掃描數千萬物件）。訓練（`train.ts`）仍用 Map，需要 `--max-old-space-size=34000`。
 - `build-big-corpus.ts` 取「連續中文字片段」而非整句清洗，並丟掉包含任何評測句的片段（防洩漏）。`CORPUS_EN=1`：英文詞換成類別符號 `EN_CLASS`（``，`core/src/index.ts`）、中英之間的空白不斷句，含英文的片段每 200 個留一個到 `mixed-heldout.txt`（不訓練）；第二個參數 0＝只建 PTT。中英評測集 `eval/mixed.jsonl`（`scripts/build-mixed-eval.ts`）。解碼器把含拉丁字母的原樣 token 當 `EN_CLASS` 查 LM（`decode.rs` `is_english`），輸出原字。數字見 docs/MEMORY.md §7。
 - `LM_TOKEN_PENALTY`（預設 14）必須大於高頻單字的 log(freq)，否則訓練斷詞會把詞切成單字。
-- 有字的音節打錯（魔跳出→沒跳出）：解碼後的單字局部修正 `refine`（預設開）、選字視窗的更正字排法 `MenuRank`、學打錯習慣 `Channel::learn`；實驗指令 `zhuyin-native menu`／`habit`（`exp.rs`），數字見 docs/MEMORY.md §8。
+- 有字的音節打錯（魔跳出→沒跳出）：解碼後的單字局部修正 `refine`（預設開；上一鍵已更正的字加 `refine_sticky` 3 防退回，`ZHUYIN_FLIP=1 eval` 數退回）、選字視窗的更正字排法 `MenuRank`、學打錯習慣 `Channel::learn`；實驗指令 `zhuyin-native menu`／`habit`（`exp.rs`），數字見 docs/MEMORY.md §8。
 - 挖詞：`npx tsx packages/data-pipeline/scripts/mine-words.ts [lm.tsv] [lexicon.jsonl] [mined.jsonl]`（約 3 分鐘）從 lm.tsv 的詞計數挖常用複合詞 → `data/processed/mined.jsonl`（provenance=mined），`npm run data:lexicon` 合併進詞典；之後要重訓 lm.tsv、重建 lm.bo.bin 新詞才有機率。門檻與數字見 docs/MEMORY.md §7。
 - 記憶體分析、微軟注音的宿主方式、縮小方案、挖詞與中英混打的實驗：`docs/MEMORY.md`（檔頭是現況表，下面是依日期的實驗紀錄）。PIME 的架構、協定、後端生命週期、當機事故：`docs/PIME-NOTES.md`。安裝到 PIME 的教學：`docs/PIME-INSTALL.md`。
 - 已量過、不要重試：開放定址 fp=32 句 −1.5／−2.6（查不到的鍵約 0.7% 誤中）；load 0.9 慢約 25%；q6／q4 有損；mmap 對 TS 的雜湊表無效（10 句內讀到 91–100% 的頁）。

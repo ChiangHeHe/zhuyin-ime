@@ -70,6 +70,9 @@ pub struct Decoder {
     pub refine_cost_scale: f64,
     /// refine 扣掉的一元機率差權重（0＝不扣）
     pub refine_uni: f64,
+    /// refine 對上一次第一名已採用的更正讀音加的分（防打下一個字時退回原字）；0＝關。
+    /// 預設 3（2026-11-04：有錯的退回 60→53／43→39，句準不變；docs/MEMORY.md §8）
+    pub refine_sticky: f64,
     /// X1 領域先驗：domain 裡的詞（DOMAIN_TECH）詞級 log 機率加這麼多；0＝關
     pub domain_bonus: f64,
     domain: std::collections::HashSet<&'static str>,
@@ -158,6 +161,8 @@ pub struct DecodeOptions<'m> {
     /// L3 假設：每個位置的候選意圖音節（第一個是觀察音節、代價 0）
     pub alternatives: Option<&'m [Vec<Hypothesis>]>,
     pub fixed: &'m [FixedSpan],
+    /// 上一次第一名的逐音節讀音；refine 對上次已更正的字加 refine_sticky
+    pub prev: &'m [String],
 }
 
 /// 詞編號：小於詞典詞數的是詞典詞，其餘是這個格的額外詞（空詞、□、原樣 token）
@@ -265,6 +270,7 @@ impl Decoder {
             refine_margin: Some(0.0),
             refine_cost_scale: 1.0,
             refine_uni: 0.0,
+            refine_sticky: 3.0,
             domain_bonus: 2.0,
             domain: Default::default(),
             max_span,
@@ -599,6 +605,7 @@ impl Decoder {
                     modifier: o.modifier,
                     alternatives: o.alternatives,
                     fixed: &[],
+                    prev: o.prev,
                 },
             );
         }
@@ -763,9 +770,15 @@ impl Decoder {
                                 * self.a
                                 * (self.lm.word_unigram(&cur[i].word)
                                     - self.lm.word_unigram(&orig.word));
-                        let d = self.path_score(&cur, o) - cost - base;
+                        let sticky = if o.prev.get(pos) == Some(&h.syl) {
+                            self.refine_sticky
+                        } else {
+                            0.0
+                        };
+                        let d = self.path_score(&cur, o) - cost - base + sticky;
                         if d > margin && best.as_ref().is_none_or(|b| d > b.0) {
-                            best = Some((d, cost, cur[i].clone()));
+                            // 黏著分不是真的分數：base 要記真的整句分數
+                            best = Some((d, cost - sticky, cur[i].clone()));
                         }
                     }
                 }
@@ -1138,6 +1151,13 @@ mod tests {
         // 贏不過門檻（10 − 3 < 8）就不換
         d.refine_margin = Some(8.0);
         assert_eq!(d.decode(&seq, &o)[0].text(), "魔跳");
+        // 上一次已經更正成 沒：黏著分 3 讓它過門檻（10 − 3 + 3 > 8），不退回 魔
+        let prev = rd("ㄇㄟˊ");
+        let op = DecodeOptions { prev: &prev, ..o };
+        assert_eq!(d.decode(&seq, &op)[0].text(), "沒跳");
+        d.refine_sticky = 0.0;
+        assert_eq!(d.decode(&seq, &op)[0].text(), "魔跳");
+        d.refine_sticky = 3.0;
         // 選字視窗列出 沒（排在照打讀音的字後面），選了之後格走得通
         let c = d.span_cands(&seq, 0, 1, Some(&alts));
         assert_eq!(
