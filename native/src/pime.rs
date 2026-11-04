@@ -361,6 +361,8 @@ pub struct Backend {
     shown_mode: HashMap<String, Mode>,
     /// 組字中切換了模式、還沒重畫組字區（遊戲常沒有 onKeyUp）：下一個鍵在 onKeyDown 補畫
     stale: bool,
+    /// 上次把被關掉的鍵盤打開的時間（程式一直關的話不跟它來回搶）
+    reopened: Option<Instant>,
     /// 哪一邊的 Shift 單按會切換中英：config.json 的 "shiftToggle"，"both"｜"left"｜"right"｜"none"
     shift_toggle: &'static str,
     /// 鍵盤排列：config.json 的 "layout"（keymap::LAYOUTS 的名稱，沒寫或看不懂＝大千）
@@ -417,6 +419,7 @@ impl Backend {
             shift_at: Instant::now(),
             shown_mode: HashMap::new(),
             stale: false,
+            reopened: None,
             shift_toggle: "both",
             layout: Layout::Dachen,
             usage: false,
@@ -1319,6 +1322,11 @@ impl Backend {
                     }),
                 );
                 self.mode_button(&mut r, "addButton");
+                // 鍵盤關著時 DLL 把按鍵原樣放行（libIME2 TextService::OnTestKeyDown）。
+                // 同新酷音（chewing_ime.py onActivate 的 setKeyboardOpen）啟用時打開
+                if msg["isKeyboardOpen"] == json!(false) {
+                    r.insert("openKeyboard".into(), json!(true));
+                }
                 None
             }
             "onDeactivate" => {
@@ -1421,8 +1429,21 @@ impl Backend {
                 None
             }
             "onKeyboardStatusChanged" => {
-                if owner && msg["opened"].as_bool() == Some(false) {
-                    self.clear(&mut r);
+                if msg["opened"].as_bool() == Some(false) {
+                    if owner {
+                        self.clear(&mut r);
+                    }
+                    // 泰拉瑞亞（DXUT ImeUi）不打字時 ImmAssociateContext(NULL)、開聊天框再接回，
+                    // 接回後鍵盤可能停在關閉：按鍵全部放行、打出英文字母（微軟注音可以打）。
+                    // 本輸入法用 Shift 切中英、不靠開關，被關就打開；1 秒內再被關就不搶，免得跟程式來回
+                    if self
+                        .reopened
+                        .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+                    {
+                        self.reopened = Some(Instant::now());
+                        eprintln!("[pime] {} 鍵盤被關閉，重新打開", now_str());
+                        r.insert("openKeyboard".into(), json!(true));
+                    }
                 }
                 if self.win8 {
                     r.insert(
@@ -1895,6 +1916,21 @@ mod tests {
         send(&mut be, "c1", SHIFT_DOWN);
         send(&mut be, "c1", SHIFT_UP);
         assert!(be.mode == Mode::English);
+    }
+
+    #[test]
+    fn closed_keyboard_reopens() {
+        let mut be = backend();
+        let act = r#"{"method":"onActivate","isKeyboardOpen":false,"seqNum":0}"#;
+        assert_eq!(send(&mut be, "c1", act)["openKeyboard"], json!(true));
+        let act = r#"{"method":"onActivate","isKeyboardOpen":true,"seqNum":0}"#;
+        assert!(send(&mut be, "c1", act).get("openKeyboard").is_none());
+        let closed = r#"{"method":"onKeyboardStatusChanged","opened":false,"seqNum":1}"#;
+        assert_eq!(send(&mut be, "c1", closed)["openKeyboard"], json!(true));
+        // 1 秒內又被關：不跟程式搶
+        assert!(send(&mut be, "c1", closed).get("openKeyboard").is_none());
+        let opened = r#"{"method":"onKeyboardStatusChanged","opened":true,"seqNum":2}"#;
+        assert!(send(&mut be, "c1", opened).get("openKeyboard").is_none());
     }
 
     #[test]
