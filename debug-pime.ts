@@ -567,11 +567,11 @@ async function smoke(): Promise<void> {
   check((await press('Enter')).last['compositionString'] === sel, `Enter 選反白的 ${sel}`);
   await press('Escape');
 
-  // 清單最後一項是注音本身：從第一頁 PageUp 循環到最後一頁，最後一個就是 ㄋㄧˇ
+  // 注音本身放清單最後，但不超過第二頁（第二欄）第一個：ㄋㄧˇ 候選很多，下一頁第一個就是它
   for (const c of ['KeyS', 'KeyU', 'Digit3']) await press(c);
   await press('ArrowDown');
-  const lastPage = (await press('PageUp')).last['candidateList'] as string[];
-  check(lastPage.at(-1) === 'ㄋㄧˇ', `清單最後一項是注音本身（${lastPage.at(-1)}）`);
+  const page2 = (await press('Space')).last['candidateList'] as string[];
+  check(page2[0] === 'ㄋㄧˇ', `注音本身在第二頁第一個（${page2[0]}）`);
   await press('Escape');
   await press('Escape');
   // 選字後游標跳到選定那段後面：ㄋㄧˇ ㄏㄠˇ，Home，↓，1（最長的詞）

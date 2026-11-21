@@ -419,7 +419,8 @@ impl ImeEngine {
         (0..c.min(seq.len())).rev().find(|&i| !is_literal(&seq[i]))
     }
 
-    /// 從選字起點（menu_start）開始的所有候選詞。with_reading：清單最後加上那個音節的注音本身（微軟注音，同 TS）
+    /// 從選字起點（menu_start）開始的所有候選詞。with_reading：清單加上那個音節的注音本身，
+    /// 放最後但不超過第二欄（第二頁）的第一個，候選很多時不用翻到底才找得到
     fn menu_items(&self, with_reading: bool) -> Vec<FixedSpan> {
         let Some(start) = self.menu_start() else {
             return vec![];
@@ -437,11 +438,15 @@ impl ImeEngine {
         );
         let syl = &seq[start];
         if with_reading && !is_literal(syl) {
-            exact.push(FixedSpan {
-                pos: start,
-                len: 1,
-                word: syl.clone(),
-            });
+            let at = exact.len().min(MENU_PAGE);
+            exact.insert(
+                at,
+                FixedSpan {
+                    pos: start,
+                    len: 1,
+                    word: syl.clone(),
+                },
+            );
         }
         exact
     }
@@ -848,7 +853,7 @@ impl ImeEngine {
         }
         if let (Some(adapter), Some(chosen)) = (self.adapter.as_mut().filter(|a| a.enabled), chosen)
         {
-            // 選了注音本身（清單最後一項）的段落：和原樣字元一樣不學，免得注音變成使用者詞（同 TS）
+            // 選了注音本身（清單裡的讀音那項）的段落：和原樣字元一樣不學，免得注音變成使用者詞（同 TS）
             let opaque = |b: &crate::decode::WordBreakdown| {
                 b.word == UNK
                     || is_literal(&b.reading[0])
@@ -1373,10 +1378,32 @@ mod tests {
     }
 
     #[test]
+    fn reading_item_capped_at_second_page() {
+        // 候選超過一頁：注音本身在第二頁第一個（索引 MENU_PAGE），不在最後
+        let chars = [
+            "一", "衣", "醫", "依", "伊", "壹", "揖", "噫", "漪", "咿", "猗", "銥",
+        ];
+        let lex: Vec<(&str, &str)> = chars.iter().map(|&c| ("ㄧ", c)).collect();
+        let mut e = engine(&lex);
+        type_syllables(&mut e, "ㄧ");
+        e.on_key("ArrowDown", None, false);
+        let items: Vec<String> = e
+            .menu
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|f| f.word.clone())
+            .collect();
+        assert_eq!(items.len(), chars.len() + 1);
+        assert_eq!(items[MENU_PAGE], "ㄧ");
+    }
+
+    #[test]
     fn menu_pick_saves_user_phrase() {
         let mut e = engine(LEX);
         type_syllables(&mut e, "ㄋㄧˇ ㄏㄠˇ");
-        // 游標在最後：清單從最後一個音節開始；最後一項是注音本身
+        // 游標在最後：清單從最後一個音節開始；候選不到一頁時注音本身在最後
         let st = e.on_key("ArrowDown", None, false);
         assert_eq!(st.menu.unwrap().items, ["好", "號", "ㄏㄠˇ"]);
         e.on_key("Escape", None, false);
