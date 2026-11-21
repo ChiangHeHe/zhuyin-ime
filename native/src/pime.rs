@@ -162,8 +162,12 @@ fn save_delay() -> Duration {
 }
 
 /// 設定檔／環境變數的秒數 → Duration，夾在 1 秒到 1 天。`from_secs_f64` 遇到負數、NaN、
-/// 太大會 panic，而這裡在 `catch_unwind` 外，後端會一直重開
+/// 太大會 panic，而這裡在 `catch_unwind` 外，後端會一直重開。0、負數、NaN 是寫錯了：用預設值
+/// （夾成 1 秒的話，idleSecs 寫 -5 會變成每停一秒就卸載引擎）
 pub fn secs(v: f64, default: f64) -> Duration {
+    if v.is_nan() || v <= 0.0 {
+        return Duration::from_secs_f64(default);
+    }
     Duration::try_from_secs_f64(v.clamp(1.0, 86400.0)).unwrap_or(Duration::from_secs_f64(default))
 }
 
@@ -1784,7 +1788,10 @@ mod tests {
 
     #[test]
     fn secs_clamped() {
-        assert_eq!(secs(-5.0, 30.0), Duration::from_secs(1));
+        assert_eq!(secs(-5.0, 30.0), Duration::from_secs(30));
+        assert_eq!(secs(0.0, 30.0), Duration::from_secs(30));
+        assert_eq!(secs(f64::NEG_INFINITY, 30.0), Duration::from_secs(30));
+        assert_eq!(secs(0.2, 30.0), Duration::from_secs(1));
         assert_eq!(secs(1e20, 30.0), Duration::from_secs(86400));
         assert_eq!(secs(f64::INFINITY, 30.0), Duration::from_secs(86400));
         assert_eq!(secs(f64::NAN, 30.0), Duration::from_secs(30));
