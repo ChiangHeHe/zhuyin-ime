@@ -300,6 +300,15 @@ impl Channel {
                 let mut q = p;
                 q.0[slot] = None;
                 add(&q, o.extra, false);
+                // 多按的鄰鍵蓋掉同槽原本的符號 x（ㄒㄧㄠ 按 U 時多按旁邊的 Y → ㄗㄧㄠ）：
+                // 只在 c 是音節裡另一個符號的鄰鍵時試
+                let nb = self.sym_neighbors.get(c).map_or(&[][..], |v| v);
+                if (0..3).any(|t| t != slot && p.0[t].is_some_and(|d| nb.contains(&d))) {
+                    for &x in pool {
+                        q.0[slot] = Some(x);
+                        add(&q, o.extra, false);
+                    }
+                }
                 // 按到相鄰鍵
                 for &s in self.sym_neighbors.get(c).map_or(&[][..], |v| v) {
                     let s_slot = slot_of(s).unwrap();
@@ -445,6 +454,18 @@ mod tests {
         let hs = c.expand("ㄓㄣ");
         assert_eq!(cost(&hs, "ㄗㄥ"), None);
         assert!(cost(&hs, "ㄗㄣ").is_some() && cost(&hs, "ㄓㄥ").is_some());
+    }
+
+    #[test]
+    fn extra_key_overwrote_same_slot() {
+        let c = channel(&["ㄒㄧㄠˇ", "ㄗㄠˇ"], Default::default());
+        let hs: Vec<_> = c.expand("ㄗㄧㄠˇ").into_iter().map(|h| h.syl).collect();
+        // ㄒ ㄧ 之後多按 U 旁的 Y：ㄗ 蓋掉 ㄒ
+        assert!(hs.contains(&"ㄒㄧㄠˇ".to_string()), "{hs:?}");
+        // ㄗ 不是 ㄠ 的鄰鍵：只有 ㄠ 的話不試
+        let c = channel(&["ㄒㄠˇ"], Default::default());
+        let hs: Vec<_> = c.expand("ㄗㄠˇ").into_iter().map(|h| h.syl).collect();
+        assert!(!hs.contains(&"ㄒㄠˇ".to_string()), "{hs:?}");
     }
 
     #[test]
