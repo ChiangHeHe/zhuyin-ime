@@ -10,8 +10,6 @@ pub struct CompositionBuffer {
     done: Vec<String>,
     /// 聲母、介音、韻母
     partial: [Option<&'static str>; 3],
-    /// 部分槽位的插入歷史，供 Backspace 回退
-    history: Vec<usize>,
     /// 游標（第幾個已完成音節之前）；None＝在最後
     cursor_at: Option<usize>,
     pub layout: Layout,
@@ -49,7 +47,11 @@ impl CompositionBuffer {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.done.is_empty() && self.history.is_empty()
+        self.done.is_empty() && !self.has_pending()
+    }
+
+    fn has_pending(&self) -> bool {
+        self.partial.iter().any(Option::is_some)
     }
 
     /// 回傳完成的音節是否合法（沒完成音節時為 true）
@@ -68,7 +70,7 @@ impl CompositionBuffer {
         }
         match self.layout.map_key(code, &self.partial) {
             Mapped::Tone(t) => {
-                if self.history.is_empty() {
+                if !self.has_pending() {
                     return true;
                 }
                 self.layout.on_end(&mut self.partial);
@@ -76,18 +78,12 @@ impl CompositionBuffer {
                 let legal = self.legal.contains(&syl);
                 self.insert(syl);
                 self.partial = [None; 3];
-                self.history.clear();
                 legal
             }
             Mapped::Symbol(s) => {
                 self.layout.on_symbol(&mut self.partial, s);
-                let slot = slot_of(s).unwrap();
-                // 同槽再按＝覆蓋；該槽移到退格歷史最後
-                if self.partial[slot].is_some() {
-                    self.history.retain(|&h| h != slot);
-                }
-                self.partial[slot] = Some(s);
-                self.history.push(slot);
+                // 同槽再按＝覆蓋
+                self.partial[slot_of(s).unwrap()] = Some(s);
                 ok
             }
             Mapped::Unmapped => true,
@@ -99,7 +95,7 @@ impl CompositionBuffer {
         if ch.len() == 1 && ch.as_bytes()[0].is_ascii_digit() {
             return self.append_english(ch);
         }
-        if !self.history.is_empty() {
+        if self.has_pending() {
             return false;
         }
         self.insert(ch.to_string());
@@ -108,7 +104,7 @@ impl CompositionBuffer {
 
     /// 英文模式打的字母／數字：併進游標前的英文 token，前面不是英文就開新的；有未完成槽位時不收
     pub fn append_english(&mut self, ch: &str) -> bool {
-        if !self.history.is_empty() {
+        if self.has_pending() {
             return false;
         }
         let c = self.cursor();
@@ -121,9 +117,9 @@ impl CompositionBuffer {
         true
     }
 
-    /// 先退部分槽位，再退游標前的已完成音節（英文 token 一次退一個字母）
+    /// 先退部分槽位（顯示上最後一個注音，不是最後按的），再退游標前的已完成音節（英文 token 一次退一個字母）
     pub fn backspace(&mut self) -> bool {
-        if let Some(last) = self.history.pop() {
+        if let Some(last) = self.partial.iter().rposition(Option::is_some) {
             self.partial[last] = None;
             return true;
         }
@@ -145,7 +141,7 @@ impl CompositionBuffer {
     }
 
     pub fn delete_forward(&mut self) -> bool {
-        if !self.history.is_empty() || self.cursor() >= self.done.len() {
+        if self.has_pending() || self.cursor() >= self.done.len() {
             return false;
         }
         self.done.remove(self.cursor());
@@ -158,7 +154,6 @@ impl CompositionBuffer {
     /// 丟掉打到一半的注音（還沒成音節的槽位）
     pub fn clear_pending(&mut self) {
         self.partial = [None; 3];
-        self.history.clear();
     }
 
     /// 評測用：直接換成這串音節（不經按鍵）
@@ -170,7 +165,6 @@ impl CompositionBuffer {
     pub fn reset(&mut self) {
         self.done.clear();
         self.partial = [None; 3];
-        self.history.clear();
         self.cursor_at = None;
     }
 }
@@ -209,13 +203,15 @@ mod tests {
     }
 
     #[test]
-    fn same_slot_overwrites_and_moves_to_end_of_history() {
+    fn same_slot_overwrites_and_backspace_removes_last_shown() {
         let mut b = buf();
-        keys(&mut b, &["KeyS", "KeyU", "KeyC"]);
-        assert_eq!(b.pending_display(), "ㄏㄧ");
-        // 最後按的是聲母：先退聲母
+        // ㄍ ㄨ ㄎ：聲母被覆蓋成 ㄎㄨ；退格退顯示上最後的 ㄨ，不是最後按的 ㄎ
+        keys(&mut b, &["KeyE", "KeyJ", "KeyD"]);
+        assert_eq!(b.pending_display(), "ㄎㄨ");
         b.backspace();
-        assert_eq!(b.pending_display(), "ㄧ");
+        assert_eq!(b.pending_display(), "ㄎ");
+        b.backspace();
+        assert!(b.is_empty());
     }
 
     #[test]

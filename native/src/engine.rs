@@ -734,16 +734,16 @@ impl ImeEngine {
             .or(numpad)
             .or(code.strip_prefix("Numpad").and_then(numpad_op));
         let literal = punct.or((code == "Space").then_some(" "));
+        // 打到一半的注音遇到標點：丟掉那半個音節（空白不算，它是一聲鍵）
+        if punct.is_some() {
+            self.comp.clear_pending();
+        }
         let mut inserted = false;
-        match literal {
-            Some(lit) if self.comp.pending_display().is_empty() => {
-                if self.comp.is_empty() {
-                    return Self::direct(Some(lit.to_string()));
-                }
-                inserted = self.comp.push_literal(lit);
+        if let Some(lit) = literal.filter(|_| self.comp.pending_display().is_empty()) {
+            if self.comp.is_empty() {
+                return Self::direct(Some(lit.to_string()));
             }
-            _ if punct.is_some() => return self.state(true),
-            _ => {}
+            inserted = self.comp.push_literal(lit);
         }
         if let Some(st) = self.on_nav_key(code) {
             return st;
@@ -757,12 +757,13 @@ impl ImeEngine {
     }
 
     /// 直接打一個標點（Ctrl 組合的全形標點）：組字區空就輸出，否則插在游標處；
-    /// 選字視窗開著或有打到一半的注音時不收（同 on_key 的標點）
+    /// 選字視窗開著時不收；有打到一半的注音就丟掉它（同 on_key 的標點）
     pub fn on_punct(&mut self, lit: &str) -> EngineState {
         self.keys += 1;
-        if self.menu.is_some() || !self.comp.pending_display().is_empty() {
+        if self.menu.is_some() {
             return self.state(true);
         }
+        self.comp.clear_pending();
         if self.comp.is_empty() {
             return Self::direct(Some(lit.to_string()));
         }
@@ -1330,12 +1331,17 @@ mod tests {
         e.on_punct("，");
         e.on_key("Numpad7", Some("7"), false);
         assert_eq!(e.state(true).composition, "你好!，7");
-        // 有打到一半的注音時標點不收
+        // 有打到一半的注音時按標點：丟掉半個音節，放進標點（全形、半形都一樣）
         e.on_key("KeyS", None, false);
         e.on_punct("。");
-        assert_eq!(e.state(true).composition, "你好!，7ㄋ");
-        e.on_key("Backspace", None, false);
-        assert_eq!(e.commit(0), "你好!，7");
+        assert_eq!(e.state(true).composition, "你好!，7。");
+        e.on_key("KeyS", None, false);
+        e.on_key("Digit1", Some("!"), true);
+        assert_eq!(e.commit(0), "你好!，7。!");
+        // 只有半個音節：丟掉後組字區是空的，標點直接輸出
+        e.on_key("KeyS", None, false);
+        assert_eq!(e.on_punct("。").text.as_deref(), Some("。"));
+        assert!(!e.is_composing());
     }
 
     #[test]
